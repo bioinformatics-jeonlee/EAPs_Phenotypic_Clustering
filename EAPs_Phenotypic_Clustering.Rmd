@@ -10,18 +10,10 @@ $~$
 
 #### Environment set-up and data import
 ```{r message=FALSE, warning=FALSE}
-library(filling)
 library(data.table)
 library(factoextra)
-library(cluster)
 library(ggplot2)
-library(ggrepel)
 library(ggfortify)
-library(gridExtra)
-
-library(dendextend)
-library(circlize)
-
 library(knitr)
 library(kableExtra)
 
