@@ -1,0 +1,199 @@
+---
+title: "Phenotypic clusterubg of EAPs"
+output: 
+  html_document: default
+---
+written by Jeon Lee on May 7, 2020; updated on September 24, 2020
+
+$~$
+
+
+#### Environment set-up and data import
+```{r message=FALSE, warning=FALSE}
+library(filling)
+library(data.table)
+library(factoextra)
+library(cluster)
+library(ggplot2)
+library(ggrepel)
+library(ggfortify)
+library(gridExtra)
+
+library(dendextend)
+library(circlize)
+
+library(knitr)
+library(kableExtra)
+
+setwd("./")
+
+Sys.setenv(http_proxy="proxy.swmed.edu:3128")
+Sys.setenv(https_proxy="proxy.swmed.edu:3128")
+
+df <- read.table("EAP_Phenotype_Data.csv", sep=",", header = TRUE)
+
+colnames(df) <- gsub( "\\.", "\\_", colnames(df))
+rownames(df) <- df$EAP
+df <- df[,-c(1)]
+```
+
+$~$
+
+#### Visualization of proteins' PCA plot and their distance matrix
+```{r message=FALSE, warning=FALSE, fig.width = 10, fig.height = 8}
+df_pctDiff <- df
+
+#PCA plot for df_pctDiff
+autoplot(prcomp(df_pctDiff), data=df_pctDiff)
+
+#Visualize a distance matrix among proteins
+distance <- get_dist(df_pctDiff, method = "euclidean") # "euclidean", "minkowski", "pearson", etc 
+fviz_dist(distance, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+```
+
+<div class="alert alert-warning">
+  <strong>PCA plot:</strong> About 94% of data variance can ben explained only with PC1 and PC2.<p>
+  <strong>Distance heatmap:</strong> There seem to exist very obvious and a little bit less obvious clusters.<p>
+</div>
+
+$~$
+
+#### Gap statistic for optimal cluster number(K) search
+```{r message=FALSE, warning=FALSE, fig.width = 8, fig.height = 6}
+res.km <- eclust(df_pctDiff, "kmeans", k = NULL, k.max = 15, nstart = 25, graph = FALSE, gap_maxSE = list(method = "globalSEmax", SE.factor = 1), seed=123) # if k = NULL, an optimal number searched by gap statistic is used
+
+# Gap statistic plot
+fviz_gap_stat(res.km$gap_stat, maxSE = list(method = "globalSEmax", SE.factor = 1))
+```
+
+<div class="alert alert-warning">
+  <strong>Automatic optimal k selection:</strong> k=10 is automatically selected by a gap statistic analysis as an optimal cluster number.
+</div>
+
+$~$
+
+#### K-means clustering (k=10)
+```{r message=FALSE, warning=FALSE, fig.width = 8, fig.height = 8}
+K <- 10 
+res.km2 <- eclust(df_pctDiff, "kmeans", k = K, nstart = 25, graph = FALSE)
+#fviz_silhouette(res.km2) # Silhouette plot
+fviz_cluster(res.km2, data = myData, repel = TRUE, ellipse.type = "convex", show.clust.cent = FALSE)
+
+tb_km <- data.frame(sort(res.km2$cluster))
+colnames(tb_km) <- "Cluster No."
+kable(tb_km) %>% kable_styling("striped", full_width = F) %>% scroll_box(height = "400px")
+```
+
+<div class="alert alert-warning">
+  <strong>k-means clustering result:</strong> Ten clusters, which are identified by the k-means clustering method, are marked on a PCA plot. Cluster numbers assgined to the proteins are listed in the table above.
+</div>
+
+$~$
+
+#### APC(Affinity Propagation Clustering) method
+```{r message=FALSE, warning=FALSE, fig.width = 8, fig.height = 8}
+library(apcluster)
+apres <- apcluster(negDistMat(r=2), df_pctDiff)
+plot(apres, df_pctDiff)
+
+heatmap(apres, cexRow=1,cexCol=1)
+
+library(Biobase)
+no_elem <- listLen(apres@clusters)
+tb_apc <- data.frame(unlist(apres@clusters))
+colnames(tb_apc) <- "Cluster No."
+tb_apc$`Cluster No.` <- rep(1:K, no_elem)
+
+kable(tb_apc) %>% kable_styling("striped", full_width = F) %>% scroll_box(height = "400px")
+```
+
+<div class="alert alert-warning">
+  <strong> APC result:</strong> The clustering is based on proteins' similarity--it takes a similarity matrix (e.g. negative distance matrix) as its input and cluster identification is done based on the concept of "message passing" between data points. Typically, APC does not require the number of clusters to be determined or estimated before its run. Interestingly, the method detected 10 clusters automatically and these results are visualized in the form of scatter plot matrices and a heatmap. Each protein's cluster number is listed in the table above.
+</div>
+
+$~$
+
+#### Comparison of the clustering results
+```{r message=FALSE, warning=FALSE, fig.width = 8, fig.height = 10}
+tb_all <- merge(tb_km, tb_apc, by="row.names")
+colnames(tb_all) <- c("Protein", "K-means", "APC")
+rownames(tb_all) <- tb_all$Protein
+tb_all <- tb_all[,-c(1)]
+df_counts <- melt(table(tb_all))
+df_counts <- df_counts[df_counts$value!=0,]
+
+#=myColors
+library(RColorBrewer)
+n <- 10
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+color_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+set.seed(1234)
+myColors = sample(color_vector, n)
+#======
+
+library(ggalluvial)
+df_counts$`K-means` <- as.factor(df_counts$`K-means`)
+df_counts$APC <- as.factor(df_counts$APC)
+
+ggplot(data = df_counts, aes(axis1 = `K-means`, axis2 = APC, y = value)) +
+  scale_x_discrete(limits = c("K-means","APC"), expand = c(.1, .05)) +
+  xlab("Clustering methods") +
+  geom_alluvium(aes(fill = `K-means`), width = 0) +
+  geom_stratum(width = 1/12) +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum))) +
+  scale_fill_manual( values = myColors ) +
+  theme_minimal() + 
+  #theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) + 
+  labs(y="Clusert No.") +
+  theme(legend.text = element_text(size=8), legend.position='none') +
+  ggtitle("Alluvial diagram")
+
+```
+$~$
+
+#### For better comparison between K-means and APC clusters
+```{r message=FALSE, warning=FALSE, fig.width = 10, fig.height = 8}
+# To reorder the clusters, change cluster IDs using a lookup table 
+lookup_km <- setNames(c(1:10), c(1, 5, 9, 8, 3, 4, 7, 10, 2, 6))
+tb_km2 <- cbind(tb_km[, -1, drop = FALSE], 
+             data.frame(lapply(tb_km, function(i) lookup_km[ as.character(i)])))
+
+lookup_APC <- setNames(c(1:10), c(4, 6, 1, 8, 9, 10, 5, 3, 7, 2))
+tb_apc2 <- cbind(tb_apc[, -1, drop = FALSE], 
+             data.frame(lapply(tb_apc, function(i) lookup_APC[ as.character(i)])))
+
+tb_all <- merge(tb_km2, tb_apc2, by="row.names")
+colnames(tb_all) <- c("Protein", "K-means", "APC")
+rownames(tb_all) <- tb_all$Protein
+tb_all <- tb_all[,-c(1)]
+df_counts <- melt(table(tb_all))
+df_counts <- df_counts[df_counts$value!=0,]
+
+
+library(ggalluvial)
+df_counts$`K-means` <- factor(df_counts$`K-means`)
+df_counts$APC <- factor(df_counts$APC)
+
+ggplot(data = df_counts, aes(axis1 = APC, axis2 = `K-means`, y = value)) +
+  scale_x_discrete(limits = c("APC", "K-means"), expand = c(.1, .05)) +
+  xlab("Clustering methods") +
+  geom_alluvium(aes(fill = `K-means`), width = 0, reverse=FALSE) + 
+  coord_flip() +
+  geom_stratum(width = 1/12, reverse=FALSE) +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)), reverse=FALSE) +
+  scale_fill_manual( values = myColors ) +
+  theme_minimal() + 
+  labs(y="Clusert No.") +
+  theme(legend.text = element_text(size=8), legend.position='none') +
+  ggtitle("Alluvial diagram")
+
+```
+
+
+<div class="alert alert-warning">
+  <strong> Alluvial diagram:</strong> In an alluvial diagram, blocks represent clusters of nodes, and stream fields between the blocks represent changes in the composition of these clusters over time or clustering methods.The clusters from both methods are found very consistent.
+</div>
+
+$~$
+
+### === End of Report ===
